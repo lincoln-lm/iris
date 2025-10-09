@@ -2,7 +2,7 @@
 
 import sys
 from core.main_window import MainWindow
-from qtpy.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 import logging
 
 if __name__ == "__main__":
