@@ -1,0 +1,5 @@
+PySide6==6.9.3
+numba-pokemon-prngs @ git+https://github.com/lincoln-lm/numba_pokemon_prngs@1e409e6f43bcf662ede58e2557448257c0888f68
+araviq6==2.1.1
+opencv-python==4.12.0.88
+numpy==2.2.6

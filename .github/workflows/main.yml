@@ -1,0 +1,62 @@
+name: Freeze Executable
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: |
+            **/requirements*.txt
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install cx_freeze==8.4.0
+      - name: Freeze
+        run: |
+          cxfreeze --script main.py --target-dir dist --target-name=iris
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ runner.os }} Build
+          path: |
+            dist/*
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download a Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      - name: Zip artifacts for release
+        run: |
+          for i in */; do zip -r "${i%/}.zip" "$i"; done
+        working-directory: artifacts
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          name: Latest Commit
+          tag_name: latest-commit
+          body: ${{ github.event.head_commit.message }}
+          files: artifacts/*
