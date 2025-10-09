@@ -28,7 +28,7 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -r requirements.txt
-          pip install cx_freeze==8.4.0
+          pip install cx_freeze
       - name: Freeze
         run: |
           cxfreeze --script main.py --target-dir dist --target-name=iris
