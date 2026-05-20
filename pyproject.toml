@@ -2,9 +2,21 @@
 name = "iris"
 version = "0.1"
 description = "Seed cracking & prediction via measurement of random blinks in Pokemon BDSP"
+dependencies = [
+    "araviq6==2.1.1",
+    "numba-pokemon-prngs",
+    "numpy==2.2.6",
+    "opencv-python==4.12.0.88",
+    "platformdirs>=4.9.6",
+    "pyside6==6.9.3",
+    "pyside6-addons==6.9.3",
+]
 
 [tool.cxfreeze]
 executables = [{ script = "main.py", base = "gui" }]
 
 [tool.cxfreeze.build_exe]
 includes = ["PySide6.QtMultimediaWidgets"]
+
+[tool.uv.sources]
+numba-pokemon-prngs = { git = "https://github.com/lincoln-lm/numba_pokemon_prngs", rev = "1e409e6f43bcf662ede58e2557448257c0888f68" }
