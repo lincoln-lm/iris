@@ -405,7 +405,7 @@ class MunchlaxCamera(QWidget):
     def request_contours(self, callback):
         def contours_callback(data):
             self.received_contours.disconnect(contours_callback)
-            (cropped, contours) = data
+            cropped, contours = data
             self.reset_blink_tracker()
             callback(cropped, contours)
             self.received_blink_state.disconnect()
@@ -416,16 +416,19 @@ class MunchlaxCamera(QWidget):
 
     def on_entropy_progress(self, entropy):
         if entropy >= 128:
+            self.entropy_progress_bar.setMaximum(entropy)
             self.entropy_progress_bar.setFormat(
                 "(Extra entropy required) Entropy: %v/128(?)"
             )
         else:
+            self.entropy_progress_bar.setMaximum(128)
             self.entropy_progress_bar.setFormat("Entropy: %v/128")
         self.entropy_progress_bar.setValue(entropy)
 
     def reset_blink_tracker(self):
         self.set_target_contour(None)
         self.entropy_progress_bar.setValue(0)
+        self.entropy_progress_bar.setMaximum(128)
         self.entropy_progress_bar.setFormat("Entropy: %v/128")
         self.blink_progress_bar.set_target_timestamp(0)
         self.blink_progress_bar.hide()
@@ -450,7 +453,7 @@ class MunchlaxCamera(QWidget):
         self.entropy_progress_bar.hide()
 
     def on_predicted_blink(self, data):
-        (next_blink, timestamp, advance) = data
+        next_blink, timestamp, advance = data
         self.blink_progress_bar.set_target_timestamp(next_blink)
         logging.info(" Predicted blink! Next: %.3fs", next_blink - timestamp)
         logging.info(" Advance: %d", advance)
