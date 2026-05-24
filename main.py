@@ -9,8 +9,10 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, force=True)
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setApplicationName("iris")
 
     window = MainWindow()
+    window.setWindowTitle("Iris")
     window.show()
     window.setFocus()
 
