@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QApplication
 import logging
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, force=True)
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
