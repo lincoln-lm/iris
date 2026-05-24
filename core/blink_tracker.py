@@ -1,4 +1,5 @@
 import logging
+import math
 from dataclasses import dataclass
 from numba_pokemon_prngs.xorshift import Xorshift128
 from .rng_recovery import extract_known_bit_length_float, recover_rng_state_float
@@ -31,7 +32,7 @@ class BlinkTracker:
         pass
 
     def process_data(self, data):
-        (detected, timestamp) = data
+        detected, timestamp = data
         if self.last_confirmed is None:
             self.current_state = detected
             self.last_confirmed = timestamp
@@ -64,6 +65,7 @@ class MunchlaxBlinkTracker(BlinkTracker):
         self.offset = 0.287155
         # allowed +/- inaccuracy from true value
         self.leeway = 0.1
+        self.required_entropy = 128
         self.on_progress_reciever = on_progress_reciever
         super().__init__(on_completion_reciever)
 
@@ -78,6 +80,14 @@ class MunchlaxBlinkTracker(BlinkTracker):
         self.blinks = []
         super().reset()
 
+    def recover_rng_state(self, blinks, leeway):
+        return recover_rng_state_float(
+            3.0,
+            12.0,
+            leeway,
+            blinks,
+        )
+
     def on_blink(self, blink: Blink):
         logging.info(" Munchlax Blink: %s", blink)
         if blink.since_last is None:
@@ -90,20 +100,17 @@ class MunchlaxBlinkTracker(BlinkTracker):
         self.entropy += extract_known_bit_length_float(
             3.0, 12.0, self.leeway, blink.since_last - self.offset
         )
-        logging.info(" Current entropy: %d/128", self.entropy)
+        logging.info(" Current entropy: %d/%d", self.entropy, self.required_entropy)
         if self.on_progress_reciever is not None:
             self.on_progress_reciever.emit(self.entropy)
-        if self.entropy >= 128:
+        if self.entropy >= self.required_entropy:
             logging.info(
                 " Estimated required entropy met (%d bits in %d observations)",
                 self.entropy,
                 len(self.blinks[1:]),
             )
-            rng_state = recover_rng_state_float(
-                3.0,
-                12.0,
-                self.leeway,
-                [b.since_last - self.offset for b in self.blinks[1:]],
+            rng_state = self.recover_rng_state(
+                [b.since_last - self.offset for b in self.blinks[1:]], self.leeway
             )
             if rng_state is None:
                 logging.warning(" Insufficient entropy, failed to recover rng state")
@@ -141,3 +148,45 @@ class MunchlaxBlinkTracker(BlinkTracker):
                 " Recovered rng state (current): %08X %08X %08X %08X", *test_rng.state
             )
             self.reset()
+
+
+class MunchlaxReidentifyBlinkTracker(MunchlaxBlinkTracker):
+    def __init__(
+        self,
+        initial_state,
+        min_advance,
+        max_advance,
+        on_completion_reciever=None,
+        on_progress_reciever=None,
+    ):
+        super().__init__(on_completion_reciever, on_progress_reciever)
+        self.initial_state = initial_state
+        self.min_advance = min_advance
+        self.max_advance = max_advance
+        self.required_entropy = math.ceil(math.log2(max_advance - min_advance + 1))
+
+    def recover_rng_state(self, blinks, leeway):
+        rng = Xorshift128(*self.initial_state)
+        rng.advance(self.min_advance)
+        result = None
+        for advance in range(self.min_advance, self.max_advance + 1):
+            test_rng = Xorshift128(*rng.state)
+            if all(
+                b - leeway <= test_rng.next_float_randrange(3.0, 12.0) <= b + leeway
+                for b in blinks
+            ):
+                logging.info(" Found valid rng state at advance %d", advance)
+                # multiple results -> inconclusive
+                if result is not None:
+                    return None
+                result = tuple(rng.state)
+            rng.next()
+        if result is None:
+            logging.error(
+                " No valid rng state found in advance range [%d, %d]",
+                self.min_advance,
+                self.max_advance,
+            )
+            for i, b in enumerate(blinks):
+                logging.error(" Blink %d: %.6f", i, b)
+        return result

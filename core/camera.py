@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from numba_pokemon_prngs.xorshift import Xorshift128
 
 from core.util import save_config_json, load_config_json
-from core.blink_tracker import MunchlaxBlinkTracker
+from core.blink_tracker import MunchlaxBlinkTracker, MunchlaxReidentifyBlinkTracker
 from core.blink_predictor import MunchlaxBlinkPredictor
 from core.blink_progress_bar import BlinkProgressBar
 
@@ -48,6 +48,8 @@ class MunchlaxCameraWorker(VideoFrameWorker):
         super().__init__()
         self.contour_receiver = contour_receiver
         self.blink_receiver = blink_receiver
+        self.rng_state_receiver = rng_state_receiver
+        self.progress_reciever = progress_reciever
         self.blink_predictor = None
         self.gaussian_size = 1
         self.pixel_threshold = 80
@@ -55,8 +57,11 @@ class MunchlaxCameraWorker(VideoFrameWorker):
         self.target_contour = None
         self.contour_threshold = 0.07
         self.full_screen = False
+        self.reidentify = False
         self.process_step = ProcessStep.GRADIENT
-        self.blink_tracker = MunchlaxBlinkTracker(rng_state_receiver, progress_reciever)
+        self.blink_tracker = MunchlaxBlinkTracker(
+            self.rng_state_receiver, self.progress_reciever
+        )
 
     def processArray(self, array):
         timestamp = perf_counter()
@@ -181,6 +186,29 @@ class MunchlaxCameraWorker(VideoFrameWorker):
 
     def set_full_screen(self, value):
         self.full_screen = value
+
+    def set_reidentify(
+        self, value, initial_state=None, min_advance=None, max_advance=None
+    ):
+        self.reidentify = value
+        self.blink_tracker.reset()
+        if self.reidentify:
+            assert (
+                initial_state is not None
+                and min_advance is not None
+                and max_advance is not None
+            )
+            self.blink_tracker = MunchlaxReidentifyBlinkTracker(
+                initial_state,
+                min_advance,
+                max_advance,
+                self.rng_state_receiver,
+                self.progress_reciever,
+            )
+        else:
+            self.blink_tracker = MunchlaxBlinkTracker(
+                self.rng_state_receiver, self.progress_reciever
+            )
 
     def set_process_step(self, value):
         self.process_step = ProcessStep(value)
@@ -328,6 +356,37 @@ class MunchlaxCamera(QWidget):
         seed_layout, self.seed_input, _ = self.labeled_widget(
             "Initial State", QLineEdit
         )
+        self.reidentify_checkbox = QCheckBox()
+        self.reidentify_checkbox.setText("Re-identify")
+        self.reidentify_checkbox.setChecked(False)
+        self.reidentify_checkbox.clicked.connect(self.set_reidentify)
+
+        self.reidentify_settings = QWidget()
+        self.reidentify_settings_layout = QVBoxLayout()
+        self.reidentify_settings.setLayout(self.reidentify_settings_layout)
+        self.reidentify_settings.setVisible(self.reidentify_checkbox.isChecked())
+
+        def advance_range_updated():
+            self.set_reidentify(self.reidentify_checkbox.isChecked())
+
+        minai_layout, self.min_advance_input, _ = self.labeled_widget(
+            "Minimum Advance", QSpinBox
+        )
+        self.min_advance_input.setRange(0, 1000000000)
+        self.min_advance_input.setValue(0)
+        self.min_advance_input.setSingleStep(1)
+        self.min_advance_input.valueChanged.connect(advance_range_updated)
+
+        maxai_layout, self.max_advance_input, _ = self.labeled_widget(
+            "Maximum Advance", QSpinBox
+        )
+        self.max_advance_input.setRange(0, 1000000000)
+        self.max_advance_input.setValue(1000)
+        self.max_advance_input.setSingleStep(1)
+        self.max_advance_input.valueChanged.connect(advance_range_updated)
+
+        self.reidentify_settings_layout.addLayout(minai_layout)
+        self.reidentify_settings_layout.addLayout(maxai_layout)
 
         self.blink_progress_bar = BlinkProgressBar()
         self.blink_progress_bar.set_target_timestamp(0)
@@ -354,6 +413,8 @@ class MunchlaxCamera(QWidget):
         self.full_layout.addLayout(bo_layout)
         self.full_layout.addLayout(bl_layout)
         self.full_layout.addLayout(seed_layout)
+        self.full_layout.addWidget(self.reidentify_checkbox)
+        self.full_layout.addWidget(self.reidentify_settings)
         self.full_layout.addWidget(self.info_display)
         self.full_layout.addWidget(self.blink_progress_bar)
         self.full_layout.addWidget(self.entropy_progress_bar)
@@ -415,14 +476,18 @@ class MunchlaxCamera(QWidget):
         self.received_contours.connect(contours_callback)
 
     def on_entropy_progress(self, entropy):
-        if entropy >= 128:
+        if entropy >= self.worker.blink_tracker.required_entropy:
             self.entropy_progress_bar.setMaximum(entropy)
             self.entropy_progress_bar.setFormat(
-                "(Extra entropy required) Entropy: %v/128(?)"
+                f"(Extra entropy required) Entropy: %v/{self.worker.blink_tracker.required_entropy}(?)"
             )
         else:
-            self.entropy_progress_bar.setMaximum(128)
-            self.entropy_progress_bar.setFormat("Entropy: %v/128")
+            self.entropy_progress_bar.setMaximum(
+                self.worker.blink_tracker.required_entropy
+            )
+            self.entropy_progress_bar.setFormat(
+                f"Entropy: %v/{self.worker.blink_tracker.required_entropy}"
+            )
         self.entropy_progress_bar.setValue(entropy)
 
     def reset_blink_tracker(self):
@@ -437,16 +502,33 @@ class MunchlaxCamera(QWidget):
 
     def on_rng_state_found(self, data):
         rng_state, last_blink = data
+        initial_advance = 0
         self.reset_blink_tracker()
+        reidentify = self.reidentify_checkbox.isChecked()
+        initial_state = self.get_initial_state()
+
+        if reidentify:
+            if initial_state is None:
+                logging.error(" Invalid seed input, cannot reidentify")
+                reidentify = False
+        if reidentify:
+            test_rng = Xorshift128(*initial_state)
+            while tuple(test_rng.state) != tuple(rng_state):
+                test_rng.next()
+                initial_advance += 1
+            initial_advance += 1
+        else:
+            rng = Xorshift128(*rng_state)
+            rng.next()
+            self.seed_input.setText(
+                f"{rng.state[0]:08X} {rng.state[1]:08X} {rng.state[2]:08X} {rng.state[3]:08X}"
+            )
+        logging.info(" Initial advance: %d", initial_advance)
         self.blink_predictor = MunchlaxBlinkPredictor(
             self.received_predicted_blink,
             rng_state,
+            initial_advance,
             last_blink.timestamp,
-        )
-        rng = Xorshift128(*rng_state)
-        rng.next()
-        self.seed_input.setText(
-            f"{rng.state[0]:08X} {rng.state[1]:08X} {rng.state[2]:08X} {rng.state[3]:08X}"
         )
         self.blink_predictor.start()
         self.blink_progress_bar.show()
@@ -462,8 +544,29 @@ class MunchlaxCamera(QWidget):
     def set_target_contour(self, contour):
         if self.blink_predictor is not None:
             self.blink_predictor.running = False
+            self.blink_predictor.wait()
             self.blink_predictor = None
         self.worker.set_target_contour(contour)
+
+    def get_initial_state(self):
+        try:
+            return [int(x, 16) for x in self.seed_input.text().split(" ")]
+        except ValueError:
+            return None
+
+    def set_reidentify(self, reidentify):
+        initial_state = self.get_initial_state()
+        min_advance = self.min_advance_input.value()
+        max_advance = self.max_advance_input.value()
+        if reidentify:
+            if initial_state is None:
+                logging.error(" Invalid seed input, cannot reidentify")
+                reidentify = False
+
+        self.worker.set_reidentify(reidentify, initial_state, min_advance, max_advance)
+        self.reidentify_checkbox.setChecked(reidentify)
+        self.reidentify_settings.setVisible(reidentify)
+        self.seed_input.setEnabled(not reidentify)
 
     def start_camera(self, camera_selector) -> None:
         if self.camera is not None:

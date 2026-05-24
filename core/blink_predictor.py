@@ -4,12 +4,14 @@ from time import perf_counter
 
 
 class MunchlaxBlinkPredictor(QThread):
-    def __init__(self, on_blink_reciever, rng_state, last_blink, offset=0.285):
+    def __init__(
+        self, on_blink_reciever, rng_state, initial_advance, last_blink, offset=0.285
+    ):
         super().__init__()
         self.running = True
         self.on_blink_reciever = on_blink_reciever
         self.rng = Xorshift128(*rng_state)
-        self.advance = 0
+        self.advance = initial_advance
         self.offset = offset
         self.next_blink = (
             last_blink + self.rng.next_float_randrange(3.0, 12.0) + self.offset
